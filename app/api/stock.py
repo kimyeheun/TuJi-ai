@@ -16,9 +16,9 @@ from app.store import STOCK_DATA_STORE
 
 load_dotenv()
 router = APIRouter()
-client = None
-# client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'),
-#     base_url="https://gms.ssafy.io/gmsapi/api.openai.com/v1")
+# client = None
+client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'),
+    base_url="https://gms.ssafy.io/gmsapi/api.openai.com/v1")
 
 
 @router.post("/ai/init", response_model=StockInitResponse)
@@ -62,7 +62,7 @@ async def stock_prompt(request: PromptRequest):
 
     logger.print(f"Actions : {str(actions)}")
 
-    results.append(ActionResult(userId=user_id, buy=buy, sell=sell, action=actions))ad
+    results.append(ActionResult(userId=user_id, buy=buy, sell=sell, action=actions))
     return PromptResponse(results=results)
 
 
