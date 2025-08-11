@@ -12,7 +12,7 @@ from ai.Model import MaskAwareAttentionLSTM
 from ai.get_data_from_prompt import get_indicators
 from ai.strategies import LowerStrategy, IntermediateStrategy
 from llm.dsl_interpreter import dsl_to_code
-from llm.prompt import generate_dsl_ollama
+from llm.prompt import generate_dsl
 from utils.mylog import logger
 
 
@@ -31,7 +31,7 @@ async def prompt_bifurcation(difficulty : int, prompt_text:str, stock_df, client
 # NOTE: 상
 async def upper_level(prompt_text:str, stock_df:pd.DataFrame, openai_client) -> List:
     # 1. LLM → DSL 파싱
-    dsl = await generate_dsl_ollama(prompt_text)
+    dsl = await generate_dsl(prompt_text)
 
     # 2. DSL → 코드 변환
     # code = dsl_to_code(dsl, df_var="df")
@@ -72,11 +72,10 @@ async def upper_level(prompt_text:str, stock_df:pd.DataFrame, openai_client) -> 
 # NOTE: 중
 async def intermediate_level(prompt_text:str, stock_df, openai_client) -> List:
     # 1. LLM → DSL 파싱
-    dsl = await generate_dsl_ollama(prompt_text)
+    dsl = await generate_dsl(prompt_text)
+    logger.print(f"Dsl : {str(dsl)}")
 
     # 2. DSL → 코드 변환
-    # code = dsl_to_code(dsl, df_var="df")
-
     df_lc = stock_df.copy(deep=False)
     df_lc.columns = df_lc.columns.str.lower()
     code = dsl_to_code(dsl, df_var="df")

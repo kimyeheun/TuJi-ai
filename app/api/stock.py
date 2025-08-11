@@ -62,7 +62,7 @@ async def stock_prompt(request: PromptRequest):
 
     logger.print(f"Actions : {str(actions)}")
 
-    results.append(ActionResult(userId=user_id, buy=buy, sell=sell, action=actions))
+    results.append(ActionResult(userId=user_id, buy=buy, sell=sell, action=actions))ad
     return PromptResponse(results=results)
 
 

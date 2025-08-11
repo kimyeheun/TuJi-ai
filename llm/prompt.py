@@ -242,9 +242,6 @@ async def generate_dsl(client, natural_text: str) -> StrategyDSL:
 
     function_args_str = response.choices[0].message.function_call.arguments
     dsl_json = json.loads(function_args_str)
-    print("+++++json++++++")
-    print(dsl_json)
-    # 최종 DSL 객체로 변환
     dsl_obj = parse_strategy_dsl(dsl_json)
     return dsl_obj
 
@@ -286,51 +283,58 @@ async def generate_dsl(client, natural_text: str) -> StrategyDSL:
 #     return parse_strategy_dsl(dsl_json)
 
 
-OLLAMA = AsyncOpenAI(base_url=cfg.api.HOST+":"+cfg.api.LLAMA_PORT+"/v1", api_key="ollama")  # api_key는 더미면 됨
-
-async def generate_dsl_ollama(natural_text: str) -> StrategyDSL:
-    tools = [{
-        "type": "function",
-        "function": function_schema  # {"name","description","parameters"} 그대로
-    }]
-
-    resp = await OLLAMA.chat.completions.create(
-        model="qwen2.5:14b-instruct-q4_K_M",  # 또는 7b-instruct-q4_K_M (VRAM 여유에 따라)
-        messages=[
-            {"role": "system", "content": f"{SYSTEM_PROMPT}"},
-            {"role": "user", "content": f"{natural_text}"},
-        ],
-        tools=tools,
-        tool_choice={
-            "type": "function",
-            "function": {"name": "parse_trading_strategy"}
-        },
-        temperature=0,
-    )
-
-    msg = resp.choices[0].message
-
-    # 1) 정상: tool_calls 로 넘어온 arguments 사용
-    args_str = None
-    if getattr(msg, "tool_calls", None):
-        for tc in msg.tool_calls:
-            if tc.function.name == "parse_trading_strategy":
-                args_str = tc.function.arguments
-                break
-
-    # 2) 예외: content에 JSON이 직접 온 경우(모델 편차) 대비
-    if args_str is None:
-        raw = msg.content or ""
-        try:
-            dsl_json = json.loads(raw)
-        except Exception:
-            import re
-            m = re.search(r"\{[\s\S]*\}$", raw.strip())
-            if not m:
-                # TODO: 예외 처리
-                raise RuntimeError(f"DSL JSON을 파싱할 수 없습니다: {raw[:200]}...")
-            dsl_json = json.loads(m.group(0))
-    else:
-        dsl_json = json.loads(args_str)
-    return parse_strategy_dsl(dsl_json)
+# OLLAMA = AsyncOpenAI(base_url=cfg.api.HOST+":"+cfg.api.LLAMA_PORT+"/v1", api_key="ollama")  # api_key는 더미면 됨
+#
+# async def generate_dsl_ollama(natural_text: str) -> StrategyDSL:
+#     tools = [{
+#         "type": "function",
+#         "function": function_schema  # {"name","description","parameters"} 그대로
+#     }]
+#
+#     resp = await OLLAMA.chat.completions.create(
+#         model="qwen3:8b", #"qwen2.5:14b-instruct-q4_K_M",  # 또는 14b-instruct-q4_K_M (VRAM 여유에 따라)
+#         messages=[
+#             {"role": "system", "content": f"{SYSTEM_PROMPT}"},
+#             {"role": "user", "content": f"{natural_text}"},
+#         ],
+#         tools=tools,
+#         tool_choice={
+#             "type": "function",
+#             "function": {"name": "parse_trading_strategy"}
+#         },
+#         temperature=0,
+#     )
+#     print("=====================")
+#     print(resp)
+#     msg = resp.choices[0].message
+#     print("=====================")
+#     print(msg)
+#     print("=====================")
+#     tool_call = resp.choices[0].message.tool_calls[0]
+#     args = json.loads(tool_call.function.arguments)
+#     print(args)
+#     print("~~~~~~~~~~~~~~~~~~~")
+#     # 1) 정상: tool_calls 로 넘어온 arguments 사용
+#     args_str = None
+#     if getattr(msg, "tool_calls", None):
+#         for tc in msg.tool_calls:
+#             if tc.function.name == "parse_trading_strategy":
+#                 args_str = tc.function.arguments
+#                 break
+#
+#     # 2) 예외: content에 JSON이 직접 온 경우(모델 편차) 대비
+#     if args_str is None:
+#         raw = msg.content or ""
+#         try:
+#             dsl_json = json.loads(raw)
+#         except Exception:
+#             import re
+#             m = re.search(r"\{[\s\S]*\}$", raw.strip())
+#             if not m:
+#                 # TODO: 예외 처리
+#                 raise RuntimeError(f"DSL JSON을 파싱할 수 없습니다: {raw[:200]}...")
+#             dsl_json = json.loads(m.group(0))
+#     else:
+#         dsl_json = json.loads(args_str)
+#     return parse_strategy_dsl(dsl_json)
 
