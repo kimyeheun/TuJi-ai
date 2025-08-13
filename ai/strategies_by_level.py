@@ -29,9 +29,9 @@ async def prompt_bifurcation(difficulty : int, prompt_text:str, stock_df, client
     return action[-60:]
 
 # NOTE: 상
-async def upper_level(prompt_text:str, stock_df:pd.DataFrame, openai_client) -> List:
+async def upper_level(prompt_text:str, stock_df:pd.DataFrame, client) -> List:
     # 1. LLM → DSL 파싱
-    dsl = await generate_dsl(prompt_text)
+    dsl = await generate_dsl(prompt_text, client)
 
     # 2. DSL → 코드 변환
     # code = dsl_to_code(dsl, df_var="df")
@@ -72,7 +72,7 @@ async def upper_level(prompt_text:str, stock_df:pd.DataFrame, openai_client) -> 
 # NOTE: 중
 async def intermediate_level(prompt_text:str, stock_df, openai_client) -> List:
     # 1. LLM → DSL 파싱
-    dsl = await generate_dsl(prompt_text)
+    dsl = await generate_dsl(prompt_text, openai_client)
     logger.print(f"Dsl : {str(dsl)}")
 
     # 2. DSL → 코드 변환
@@ -118,10 +118,8 @@ async def intermediate_level(prompt_text:str, stock_df, openai_client) -> List:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MaskAwareAttentionLSTM(input_dim=12, hidden_dim=64, output_dim=3, num_layers=2, dropout=0.3).to(device)
 
-    model_path = os.path.join(current_dir, '..', 'models', 'lstm_classifier.pt')
-    scaler_path = os.path.join(current_dir, '..', 'models', 'scaler.pkl')
-    state_dict = torch.load(model_path, map_location=device)
-    scaler = joblib.load(scaler_path)
+    state_dict = torch.load(Config.MODEL_PATH, map_location=device)
+    scaler = joblib.load(Config.SCALER_PATH)
     model.load_state_dict(state_dict)
 
     buy_signal = np.where(buy_signal.values)[0].tolist()
@@ -143,8 +141,7 @@ async def intermediate_level(prompt_text:str, stock_df, openai_client) -> List:
 async def lower_level(prompt_text:str, stock_df) -> List:
     # use_indicators = ["RSI", "MACD", "MACD_SIGNAL", "BB_UPPER", "BB_LOWER", "MOM", "CCI"]
     use_indicators = await get_indicators(prompt_text)
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    print(current_dir)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MaskAwareAttentionLSTM(input_dim=12, hidden_dim=64, output_dim=3, num_layers=2, dropout=0.3).to(device)
 
@@ -159,5 +156,4 @@ async def lower_level(prompt_text:str, stock_df) -> List:
                                    window_size=30,
                                    indicators=use_indicators)
 
-    print(action)
     return action
