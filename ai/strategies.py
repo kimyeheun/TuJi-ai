@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ai.BaseStrategy import BaseStrategy
 from Config import Config
+
 
 def get_feature_mask(mask, all_features, indicators):
     use_features = Config.PRICE_FEATURES + indicators
@@ -13,7 +13,7 @@ def get_feature_mask(mask, all_features, indicators):
     return mask
 
 # NOTE: 중급자
-class IntermediateStrategy(BaseStrategy):
+class IntermediateStrategy():
     @staticmethod
     def _prep_window_tensor(df_window: pd.DataFrame, scaler, indicators: list[str]):
         """(T, F) -> (1, T, F) 스케일링 + 마스킹"""
@@ -27,8 +27,6 @@ class IntermediateStrategy(BaseStrategy):
 
     @staticmethod
     def _slice_valid_range(valid_idx: np.ndarray, start_i: int, end_i: int):
-        """valid_idx(원본 인덱스들)에서 [start_i, end_i] 구간의 배치 인덱스 범위를 반환"""
-        # left: start_i 이상 첫 위치, right: end_i 이하 마지막 위치
         left = np.searchsorted(valid_idx, start_i, side="left")
         right = np.searchsorted(valid_idx, end_i, side="right") - 1
         if left > right:
@@ -36,8 +34,6 @@ class IntermediateStrategy(BaseStrategy):
         return left, right
 
     def run(self, stock_data, model, scaler, buy, sell, window_size=30, indicators=None, **kwargs):
-        self.reset()
-
         indicators = [] if indicators is None else indicators
         valid_idx = []  # 각 윈도우의 "종료 시점" 원본 인덱스
         X, mask = [], []
@@ -124,10 +120,8 @@ class IntermediateStrategy(BaseStrategy):
 
 
 # NOTE: 초급자
-class LowerStrategy(BaseStrategy):
+class LowerStrategy():
     def run(self, stock_data, model, scaler, window_size=30, indicators=None, **kwargs):
-        self.reset()
-
         indicators = [] if indicators is None else indicators
         valid_idx = []
         X, mask = [], []
@@ -146,7 +140,7 @@ class LowerStrategy(BaseStrategy):
 
         X = np.array(X)
         X[np.isnan(X)] = 0
-        X = scaler.fit_transform(X.reshape(-1, X.shape[2])).reshape(X.shape)
+        X = scaler.transform(X.reshape(-1, X.shape[2])).reshape(X.shape)
 
         model.eval()
         device = next(model.parameters()).device

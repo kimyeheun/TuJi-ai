@@ -1,8 +1,5 @@
 import json
 
-from openai import AsyncOpenAI
-
-from Config import settings as cfg
 from llm.dsl import *
 
 SYSTEM_PROMPT = """
@@ -174,21 +171,17 @@ function_schema = {
     }
 }
 
-
+# NOTE: 단일 Condition 또는 AND/OR 복합 조건(재귀) JSON을 파싱하여 Condition 객체로 변환.
 def parse_condition(cond_json: Dict[str, Any]) -> Condition:
-    """
-    단일 Condition 또는 AND/OR 복합 조건(재귀) JSON을 파싱하여 Condition 객체로 변환.
-    """
-    # 복합 논리 조건인지 확인 (logic 필드 유무)
+    # 복합 논리 (logic 필드 유무)
     if 'logic' in cond_json and 'conditions' in cond_json:
-        # 하위 conditions도 재귀적으로 변환
+        # 하위 conditions 재귀 변환
         sub_conditions = [parse_condition(sub) for sub in cond_json['conditions']]
         return Condition(
             logic=cond_json['logic'],
             conditions=sub_conditions
         )
-    else:
-        # 단일 leaf 조건
+    else: # 단일 leaf 조건
         return Condition(
             indicator=cond_json.get('indicator'),
             operator=cond_json.get('operator'),
@@ -199,11 +192,9 @@ def parse_condition(cond_json: Dict[str, Any]) -> Condition:
             lag=cond_json.get('lag', 0)
         )
 
+
+# NOTE: Entry/Exit 조건(복합 논리 + 액션) JSON을 파싱하여 EntryOrExit 객체로 변환.
 def parse_entry_or_exit(entry_json: Dict[str, Any]) -> EntryOrExit:
-    """
-    Entry/Exit 조건(복합 논리 + 액션) JSON을 파싱하여 EntryOrExit 객체로 변환.
-    """
-    # 조건부 복합 논리 root_condition 파싱
     root_condition = parse_condition({
         "logic": entry_json.get("logic"),
         "conditions": entry_json.get("conditions", [])
@@ -214,10 +205,8 @@ def parse_entry_or_exit(entry_json: Dict[str, Any]) -> EntryOrExit:
         comment=entry_json.get("comment")
     )
 
+# NOTE: 전체 StrategyDSL 객체로 변환
 def parse_strategy_dsl(dsl_json: Dict[str, Any]) -> StrategyDSL:
-    """
-    LLM이 반환한 최상위 DSL JSON을 전체 StrategyDSL 객체로 변환.
-    """
     entries = [parse_entry_or_exit(entry) for entry in dsl_json.get("entries", [])]
     exits = [parse_entry_or_exit(exit_) for exit_ in dsl_json.get("exits", [])]
     return StrategyDSL(
@@ -228,8 +217,8 @@ def parse_strategy_dsl(dsl_json: Dict[str, Any]) -> StrategyDSL:
         custom_logic_description=dsl_json.get("custom_logic_description")
     )
 
-
-async def generate_dsl(client, natural_text: str) -> StrategyDSL:
+# NOTE: DSL 생성
+async def generate_dsl(natural_text: str, client) -> StrategyDSL:
     response = await client.chat.completions.create(
         model="gpt-4.1",
         messages=[
@@ -244,97 +233,4 @@ async def generate_dsl(client, natural_text: str) -> StrategyDSL:
     dsl_json = json.loads(function_args_str)
     dsl_obj = parse_strategy_dsl(dsl_json)
     return dsl_obj
-
-
-# async def generate_dsl_ollama(natural_text: str) -> StrategyDSL:
-#     llm = ChatOllama(
-#         model="qwen2.5:14b-instruct-q4_K_M",
-#         base_url="http://localhost:11434",
-#         temperature=0,
-#         format="json",
-#     )
-#     llm = llm.bind_tools([function_schema])
-#
-#     PROMPT = PromptTemplate(
-#         input_variables=["SYSTEM_PROMPT"],
-#         template=(
-#             """{SYSTEM_PROMPT}"""
-#         ),
-#     )
-#     chain = PROMPT | llm
-#     response = await chain.ainvoke(
-#         {"SYSTEM_PROMPT": SYSTEM_PROMPT},
-#     )
-#     raw = response.content
-#     try:
-#         dsl_json = json.loads(raw)
-#     except Exception:
-#         # 첫 번째 {...} 블록만 뽑아 파싱 시도 (모델이 앞/뒤에 텍스트 붙였을 때)
-#         import re
-#         m = re.search(r"\{[\s\S]*\}$", raw.strip())
-#         if not m:
-#             raise
-#         dsl_json = json.loads(m.group(0))
-#
-#     print("+++++json++++++")
-#     print(dsl_json)
-#
-#
-#     return parse_strategy_dsl(dsl_json)
-
-
-# OLLAMA = AsyncOpenAI(base_url=cfg.api.HOST+":"+cfg.api.LLAMA_PORT+"/v1", api_key="ollama")  # api_key는 더미면 됨
-#
-# async def generate_dsl_ollama(natural_text: str) -> StrategyDSL:
-#     tools = [{
-#         "type": "function",
-#         "function": function_schema  # {"name","description","parameters"} 그대로
-#     }]
-#
-#     resp = await OLLAMA.chat.completions.create(
-#         model="qwen3:8b", #"qwen2.5:14b-instruct-q4_K_M",  # 또는 14b-instruct-q4_K_M (VRAM 여유에 따라)
-#         messages=[
-#             {"role": "system", "content": f"{SYSTEM_PROMPT}"},
-#             {"role": "user", "content": f"{natural_text}"},
-#         ],
-#         tools=tools,
-#         tool_choice={
-#             "type": "function",
-#             "function": {"name": "parse_trading_strategy"}
-#         },
-#         temperature=0,
-#     )
-#     print("=====================")
-#     print(resp)
-#     msg = resp.choices[0].message
-#     print("=====================")
-#     print(msg)
-#     print("=====================")
-#     tool_call = resp.choices[0].message.tool_calls[0]
-#     args = json.loads(tool_call.function.arguments)
-#     print(args)
-#     print("~~~~~~~~~~~~~~~~~~~")
-#     # 1) 정상: tool_calls 로 넘어온 arguments 사용
-#     args_str = None
-#     if getattr(msg, "tool_calls", None):
-#         for tc in msg.tool_calls:
-#             if tc.function.name == "parse_trading_strategy":
-#                 args_str = tc.function.arguments
-#                 break
-#
-#     # 2) 예외: content에 JSON이 직접 온 경우(모델 편차) 대비
-#     if args_str is None:
-#         raw = msg.content or ""
-#         try:
-#             dsl_json = json.loads(raw)
-#         except Exception:
-#             import re
-#             m = re.search(r"\{[\s\S]*\}$", raw.strip())
-#             if not m:
-#                 # TODO: 예외 처리
-#                 raise RuntimeError(f"DSL JSON을 파싱할 수 없습니다: {raw[:200]}...")
-#             dsl_json = json.loads(m.group(0))
-#     else:
-#         dsl_json = json.loads(args_str)
-#     return parse_strategy_dsl(dsl_json)
 

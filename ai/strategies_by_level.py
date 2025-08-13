@@ -1,4 +1,3 @@
-import os
 from typing import List
 
 import joblib
@@ -22,24 +21,23 @@ async def prompt_bifurcation(difficulty : int, prompt_text:str, stock_df, client
         action = await upper_level(prompt_text, stock_df, client)
     elif difficulty == 1:
         action = await intermediate_level(prompt_text, stock_df, client)
-    elif difficulty == 0:
-        action = await lower_level(prompt_text, stock_df)
     else:
-        raise NotImplementedError("난이도가 잘못 출력되었습니다. 복구 로직을 실행하세요.")
+        action = await lower_level(prompt_text, stock_df)
     return action[-60:]
+
 
 # NOTE: 상
 async def upper_level(prompt_text:str, stock_df:pd.DataFrame, client) -> List:
     # 1. LLM → DSL 파싱
     dsl = await generate_dsl(prompt_text, client)
+    logger.print(f"Dsl : {prompt_text} -> {str(dsl)}")
 
     # 2. DSL → 코드 변환
-    # code = dsl_to_code(dsl, df_var="df")
     df_lc = stock_df.copy(deep=False)
     df_lc.columns = df_lc.columns.str.lower()
     code = dsl_to_code(dsl, df_var="df")
 
-    logger.print(f"Code: \n{code}")
+    logger.print(f"Code: {prompt_text}\n{code}")
 
     # 3. 코드 실행 환경 준비 및 신호 추론
     local_env = {
@@ -55,8 +53,6 @@ async def upper_level(prompt_text:str, stock_df:pd.DataFrame, client) -> List:
     buy_signal = local_env.get("final_buy_signal", pd.Series([False]*len(stock_df)))
     sell_signal = local_env.get("final_sell_signal", pd.Series([False]*len(stock_df)))
 
-    # TODO: 예외 처리 어떻게 할까...
-    # [0,1,2] 리스트 생성 (우선 순위: 매수>매도>유지, 혹은 동시=매수)
     action = []
     for b, s in zip(buy_signal, sell_signal):
         if b and not s:
@@ -70,26 +66,18 @@ async def upper_level(prompt_text:str, stock_df:pd.DataFrame, client) -> List:
     return action
 
 # NOTE: 중
-async def intermediate_level(prompt_text:str, stock_df, openai_client) -> List:
+async def intermediate_level(prompt_text:str, stock_df, client) -> List:
     # 1. LLM → DSL 파싱
-    dsl = await generate_dsl(prompt_text, openai_client)
-    logger.print(f"Dsl : {str(dsl)}")
+    dsl = await generate_dsl(prompt_text, client)
+    logger.print(f"Dsl : {prompt_text} -> {str(dsl)}")
 
     # 2. DSL → 코드 변환
     df_lc = stock_df.copy(deep=False)
     df_lc.columns = df_lc.columns.str.lower()
     code = dsl_to_code(dsl, df_var="df")
 
-    # print("============code=============")
-    # print(code)
+    logger.print(f"Code: {prompt_text}\n{code}")
 
-#     code = """macd_line, macd_signal, macd_hist = talib.MACD(df['close'], fastperiod=12, slowperiod=26, signalperiod=9)
-# entry_signal_0 = (pd.Series([False]*len(df), index=df.index))
-# exit_signal_0 = (((macd_line.shift(1) >= macd_signal.shift(1)) & (macd_line < macd_signal)))
-# final_buy_signal = entry_signal_0
-# final_sell_signal = exit_signal_0"""
-
-    # 3. 코드 실행 환경 준비 및 신호 추론
     local_env = {
         "df": df_lc,
         "np": np,
@@ -113,7 +101,6 @@ async def intermediate_level(prompt_text:str, stock_df, openai_client) -> List:
         sell_signal[:] = True
 
     use_indicators = ["RSI", "MACD", "MACD_SIGNAL", "BB_UPPER", "BB_LOWER", "MOM", "CCI"]
-    current_dir = os.path.dirname(os.path.abspath(__file__))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MaskAwareAttentionLSTM(input_dim=12, hidden_dim=64, output_dim=3, num_layers=2, dropout=0.3).to(device)
@@ -124,8 +111,6 @@ async def intermediate_level(prompt_text:str, stock_df, openai_client) -> List:
 
     buy_signal = np.where(buy_signal.values)[0].tolist()
     sell_signal = np.where(sell_signal.values)[0].tolist()
-    print("buy: " , buy_signal)
-    print("sell: " , sell_signal)
 
     intermediate_level = IntermediateStrategy()
     action = intermediate_level.run(stock_df, model, scaler,
@@ -134,18 +119,15 @@ async def intermediate_level(prompt_text:str, stock_df, openai_client) -> List:
                                         window_size=30,
                                         indicators=use_indicators)
 
-    print(action)
     return action
 
 # NOTE: 하
 async def lower_level(prompt_text:str, stock_df) -> List:
-    # use_indicators = ["RSI", "MACD", "MACD_SIGNAL", "BB_UPPER", "BB_LOWER", "MOM", "CCI"]
     use_indicators = await get_indicators(prompt_text)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MaskAwareAttentionLSTM(input_dim=12, hidden_dim=64, output_dim=3, num_layers=2, dropout=0.3).to(device)
 
-    # state_dict와 scaler 경로 확인!
     state_dict = torch.load(Config.MODEL_PATH , map_location=device)
     scaler = joblib.load(Config.SCALER_PATH)
     model.load_state_dict(state_dict)

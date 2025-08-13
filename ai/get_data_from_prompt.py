@@ -1,5 +1,6 @@
 # NOTE: 프롬프트 분기점
 import logging
+import random
 from typing import Any
 
 from langchain.chains import LLMChain, SequentialChain
@@ -7,7 +8,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_ollama import ChatOllama
 
-from Config import settings as cfg
+from Config import settings as cfg, Config
 from utils.mylog import logger
 
 
@@ -15,7 +16,7 @@ from utils.mylog import logger
 async def classify_difficulty(prompt_text: str) -> int:
     llm = ChatOllama(
         model=cfg.api.MODEL,
-        base_url=cfg.api.HOST + ":" + cfg.api.LLAMA_PORT,
+        base_url=cfg.api.OLLAMA_HOST,
         temperature=0,
         format="json",
     )
@@ -37,7 +38,6 @@ JSON:"""
     result = await chain.ainvoke({"prompt_text": prompt_text})
     result = result.get("label", 0)
 
-    logger.print(f"Classification : {result}")
     if isinstance(result, int) and result in (0, 1, 2):
         return result
     if isinstance(result, str) and result.strip() in ("0", "1", "2"):
@@ -48,7 +48,7 @@ JSON:"""
 async def get_propensity(prompt_text: str) -> tuple[Any, Any]:
     llm = ChatOllama(
         model=cfg.api.MODEL,
-        base_url=cfg.api.HOST + ":" + cfg.api.LLAMA_PORT,
+        base_url=cfg.api.OLLAMA_HOST,
         temperature=0,
         format="json",
     )
@@ -99,8 +99,6 @@ JSON만 출력:
     chain = template | llm | JsonOutputParser()
     try:
         result = await chain.ainvoke({"prompt_text": prompt_text})
-        logger.print(f"Ratio : {result}")
-
         buy_ratio = result.get("buy")
         sell_ratio = result.get("sell")
 
@@ -109,10 +107,10 @@ JSON만 출력:
                 buy_ratio = buy_ratio / 100
             if sell_ratio > 1.0:
                 sell_ratio = sell_ratio / 100
-            return buy_ratio, sell_ratio
-        else:
-            logging.error(f"JSON 결과에 'buy' 또는 'sell' 키가 누락되었습니다: {result}")
-            return 0.3, 0.3
+        buy_ratio = buy_ratio or 1.0
+        sell_ratio = sell_ratio or 1.0
+
+        return buy_ratio, sell_ratio
     except Exception as e:
         logging.exception(f"정상적인 json 답변이 아니거나, 예상치 못한 오류 발생: {e}")
         return 0.3, 0.3
@@ -121,11 +119,11 @@ JSON만 출력:
 async def get_indicators(prompt_text: str) -> list:
     llm = ChatOllama(
         model=cfg.api.MODEL,
-        base_url=cfg.api.HOST + ":" + cfg.api.LLAMA_PORT,
+        base_url=cfg.api.OLLAMA_HOST,
         temperature=0,
         format="json",
     )
-    allowed_indicators = ["RSI", "MACD", "MACD_SIGNAL", "BB_UPPER", "BB_LOWER", "MOM", "CCI"]
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", """당신은 텍스트에서 아래 허용 지표들만 찾아내는 추출기다.
 허용 지표 외의 단어는 절대 포함하지 마라. 중복 제거.
@@ -139,11 +137,15 @@ async def get_indicators(prompt_text: str) -> list:
     chain = prompt | llm | JsonOutputParser()
 
     try:
-        parsed = await chain.ainvoke({"text": prompt_text, "allowed": allowed_indicators})
+        parsed = await chain.ainvoke({"text": prompt_text, "allowed": Config.ALL_FEATURES})
         result = parsed.get("indicators", [])
     except Exception as e:
         logging.exception(f"프롬프트로부터 지표를 정상적으로 추출하지 못함: {e}")
-        return []
+        result = []
+    finally:
+        if not result:
+            k = min(5, len(Config.ALL_FEATURES))
+            result = random.sample(Config.ALL_FEATURES, k=k)
 
     logger.print(f"Indicators : {result}")
     return result
