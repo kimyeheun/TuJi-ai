@@ -105,36 +105,25 @@ def _bb_suffix(p: Dict[str, Any]) -> str:
 # ============================================
 # 4) 인디케이터 코드 생성 (중복계산 캐시 포함)
 # ============================================
+# === PATCH: indicator_to_code - unknown indicator도 항상 안전 반환 ===
 def indicator_to_code(indicator: str,
                       params: Optional[Dict[str, Any]] = None,
                       df_var: str = "df",
                       computed_cache: Optional[Dict[Tuple[str, Tuple[Tuple[str, Any], ...]], Dict[str, str]]] = None
                       ) -> Tuple[List[str], Dict[str, str]]:
-    """
-    Returns:
-        lines:   실행 코드 라인들
-        varmap:  컴포넌트명 → 변수명
-                 - MACD:   {"macd_line": "...", "macd_signal": "...", "macd_hist": "..."}
-                 - BBANDS: {"bb_upper": "...", "bb_mid": "...", "bb_lower": "..."}
-                 - 단일:   {"main": "..."}
-    """
     base_indicator = _norm_indicator(indicator)
     local_params = dict(params or {})
 
-    # SMA50, EMA200 등 파라미터 내장 네이밍 파싱
+    # SMA50/EMA200 등 내장 파싱
     m = re.match(r'^(SMA|EMA|WMA|DEMA|TEMA|TRIMA|KAMA|MAMA|T3)(\d+)$', base_indicator, re.IGNORECASE)
     if m:
         base_indicator = m.group(1).upper()
         timeperiod = int(m.group(2))
         local_params = {**local_params, "timeperiod": timeperiod}
 
-    # MACD_SIGNAL 등 서브 별칭이 단독으로 들어오면, 실제 계산 대상은 MACD임
+    # MACD_SIGNAL 등 별칭 단독 → 본체로 정규화
     if base_indicator in COMPONENT_ALIAS:
-        base_indicator = COMPONENT_ALIAS[base_indicator][0]  # ("MACD", "macd_signal") -> "MACD"
-
-    # if base_indicator not in INDICATOR_FUNC_MAP:
-    #     # 알 수 없는 지표 => 코드 생성 불가
-    #     raise ValueError(f"Unknown indicator: {indicator}")
+        base_indicator = COMPONENT_ALIAS[base_indicator][0]
 
     if computed_cache is None:
         computed_cache = {}
@@ -142,6 +131,7 @@ def indicator_to_code(indicator: str,
     lines: List[str] = []
     varmap: Dict[str, str] = {}
 
+    # 정상 매핑 경로
     if base_indicator in INDICATOR_FUNC_MAP:
         meta = INDICATOR_FUNC_MAP[base_indicator]
         func = meta["func"]
@@ -184,19 +174,26 @@ def indicator_to_code(indicator: str,
         computed_cache[key] = varmap
         return lines, varmap
 
+    # === 여기부터: 알 수 없는 인디케이터 → 안전한 더미 시리즈 생성 ===
+    # 캐시 키(unknown도 매개변수 조합별로 중복 방지)
+    key = (f"__UNKNOWN__:{base_indicator or 'EMPTY'}", tuple(sorted((params or {}).items())))
+    if key in computed_cache:
+        return [], computed_cache[key]
+
+    # pd만 쓰는 False/0.0 시리즈 (np 없이도 동작)
+    v = f"unk_{(base_indicator or 'series').lower()}"
+    # 기본은 0.0의 float 시리즈로 생성해 비교/연산시에도 안전하게 동작
+    lines.append(f"{v} = pd.Series([0.0]*len({df_var}), index={df_var}.index)")
+    varmap = {"main": v}
+    computed_cache[key] = varmap
+    return lines, varmap
+
+
 
 # ===========================================================
 # 5) 조건식 빌더: 시리즈/상수 비교, 교차, 추세, 랙 등 전부 처리
 # ===========================================================
 def dsl_to_code(dsl: StrategyDSL, df_var: str = 'df') -> str:
-    """
-    DSL(StrategyDSL) → 실행 가능한 파이썬 코드 문자열.
-    exec(...) 하면 다음 변수가 생성됩니다:
-      - entry_signal_i (i=0..)
-      - exit_signal_i  (i=0..)
-      - final_buy_signal (bool Series)
-      - final_sell_signal (bool Series)
-    """
     code_lines: List[str] = []
     computed_cache: Dict[Tuple[str, Tuple[Tuple[str, Any], ...]], Dict[str, str]] = {}
 
@@ -206,6 +203,12 @@ def dsl_to_code(dsl: StrategyDSL, df_var: str = 'df') -> str:
     def ensure_series(ind_name: str,
                       params: Optional[Dict[str, Any]] = None,
                       prefer_component: Optional[str] = None) -> str:
+        # 인디케이터가 비었으면 False 시리즈 반환(비교식에서 안전)
+        if not ind_name:
+            v = f"_empty_{len(code_lines)}"
+            code_lines.append(f"{v} = {false_series()}")
+            return v
+
         name_u = _norm_indicator(ind_name)
 
         # 서브컴포넌트 별칭 → 기본지표 계산 후 해당 컴포넌트 반환
@@ -213,32 +216,37 @@ def dsl_to_code(dsl: StrategyDSL, df_var: str = 'df') -> str:
             base, comp = COMPONENT_ALIAS[name_u]
             lines, varmap = indicator_to_code(base, params, df_var=df_var, computed_cache=computed_cache)
             code_lines.extend(lines)
-            return varmap[comp]
+
+            # 해당 컴포넌트가 없을 때도 안전 폴백
+            v = varmap.get(comp)
+            if not v:
+                v = f"_safe_{len(code_lines)}"
+                code_lines.append(f"{v} = {false_series()}")
+            return v
 
         # 일반 지표
         lines, varmap = indicator_to_code(name_u, params, df_var=df_var, computed_cache=computed_cache)
         code_lines.extend(lines)
 
-        if name_u == "MACD":
-            comp = prefer_component if prefer_component in ("macd_line", "macd_signal", "macd_hist") else "macd_line"
-            return varmap[comp]
-        if name_u == "BBANDS":
-            comp = prefer_component if prefer_component in ("bb_upper", "bb_mid", "bb_lower") else "bb_mid"
-            return varmap[comp]
-        return varmap["main"]
+        try:
+            if name_u == "MACD":
+                comp = prefer_component if prefer_component in ("macd_line", "macd_signal", "macd_hist") else "macd_line"
+                return varmap.get(comp) or varmap.get("main") or (lambda vv: code_lines.append(f"{vv} = {false_series()}") or vv)(f"_safe_{len(code_lines)}")
+            if name_u == "BBANDS":
+                comp = prefer_component if prefer_component in ("bb_upper", "bb_mid", "bb_lower") else "bb_mid"
+                return varmap.get(comp) or varmap.get("main") or (lambda vv: code_lines.append(f"{vv} = {false_series()}") or vv)(f"_safe_{len(code_lines)}")
+            return varmap.get("main") or (lambda vv: code_lines.append(f"{vv} = {false_series()}") or vv)(f"_safe_{len(code_lines)}")
+        except Exception:
+            v = f"_safe_{len(code_lines)}"
+            code_lines.append(f"{v} = {false_series()}")
+            return v
 
     def resolve_compare_to(compare_to: Any,
                            left_indicator_hint: Optional[str] = None) -> Tuple[bool, str | float]:
-        """
-        compare_to가 dict/str/숫자 모두 가능:
-          - dict: {"indicator": "...", "params": {...}}
-          - str:  "MACD_SIGNAL" / "SMA60" / "EMA20" / "BB_UPPER" ...
-          - num:  70, 0, ...
-        반환: (is_series, name_or_value)
-        """
+
         if compare_to is None:
             return False, 0.0
-        # dict 오브젝트
+        # dict
         if isinstance(compare_to, dict):
             ind2 = _norm_indicator(compare_to.get("indicator"))
             params2 = compare_to.get("params") or {}
@@ -265,23 +273,26 @@ def dsl_to_code(dsl: StrategyDSL, df_var: str = 'df') -> str:
         return f"({varname}.shift({int(lag)}))"
 
     def cond_to_expr(cond: Condition) -> str:
+        # cond 자체가 None이면 안전 False
+        if cond is None:
+            return false_series()
+
         # (1) 재귀 논리
-        if cond.logic and cond.conditions:
-            inner = [cond_to_expr(c) for c in cond.conditions]
+        if getattr(cond, "logic", None) and getattr(cond, "conditions", None):
+            inner = [cond_to_expr(c) for c in (cond.conditions or [])]
             op = "&" if cond.logic == "AND" else "|"
-            # 빈 리스트 방지
             if not inner:
                 return false_series()
             return f"({op.join(inner)})"
 
-        # (2) 리프 조건
-        ind = _norm_indicator(cond.indicator)
+        # (2) 리프 조건: 인디케이터 누락 시 False
+        ind = _norm_indicator(getattr(cond, "indicator", None))
         if not ind:
             return false_series()
 
-        op = _norm_operator(cond.operator)
-        val = cond.value
-        params = cond.params or {}
+        op = _norm_operator(getattr(cond, "operator", None))
+        val = getattr(cond, "value", None)
+        params = getattr(cond, "params", None) or {}
         lag = getattr(cond, "lag", 0) or 0
         trend = getattr(cond, "trend", None)
 
@@ -292,33 +303,29 @@ def dsl_to_code(dsl: StrategyDSL, df_var: str = 'df') -> str:
         left_var = ensure_series(ind, params, prefer_component=prefer)
         left_var_lagged = apply_lag_to_var(left_var, lag)
 
-        # 캔들패턴 (정수 반환) 특수 처리
+        # 캔들패턴 특수 처리
         if ind.startswith("CDL"):
-            # 기본 비교가 없으면 100 시그널로 가정
             if op in ["<", ">", "<=", ">=", "==", "!="]:
                 base = f"({left_var_lagged} {op} {int(_to_float_safe(val) or 0)})"
             else:
                 base = f"({left_var_lagged} == 100)"
             return base
 
-        # 우변: compare_to 우선, 없으면 value
         is_series, right = resolve_compare_to(getattr(cond, "compare_to", None), left_indicator_hint=ind)
-        expr: str
 
-        # (3) 교차/비교/추세
+        # (3) 연산자별 처리 — op가 비정상이면 False
         if op in ("crosses_above", "crosses_below"):
             if is_series:
                 right_var = str(right)
                 prev_cmp = "<=" if op == "crosses_above" else ">="
-                now_cmp  = ">"  if op == "crosses_above" else "<"
+                now_cmp = ">" if op == "crosses_above" else "<"
                 expr = f"(({left_var_lagged}.shift(1) {prev_cmp} {right_var}.shift(1)) & ({left_var_lagged} {now_cmp} {right_var}))"
             else:
-                # 상수와의 교차
                 valf = _to_float_safe(right if right is not None else val)
                 if valf is None:
                     return false_series()
                 prev_cmp = "<=" if op == "crosses_above" else ">="
-                now_cmp  = ">"  if op == "crosses_above" else "<"
+                now_cmp = ">" if op == "crosses_above" else "<"
                 expr = f"(({left_var_lagged}.shift(1) {prev_cmp} {valf}) & ({left_var_lagged} {now_cmp} {valf}))"
 
         elif op in ("is_trending_up", "is_trending_down"):
@@ -329,16 +336,15 @@ def dsl_to_code(dsl: StrategyDSL, df_var: str = 'df') -> str:
                 right_var = str(right)
                 expr = f"({left_var_lagged} {op} {right_var})"
             else:
-                # 상수 비교
                 valf = _to_float_safe(val if val is not None else right)
                 if valf is None:
                     return false_series()
                 expr = f"({left_var_lagged} {op} {valf})"
         else:
-            # 미지원 연산자 → 안전 False
+            # 미지원/누락 연산자
             return false_series()
 
-        # (4) 추가 trend 필터
+        # (4) 추가 trend 필터(옵션)
         if trend == "up":
             expr = f"({expr} & ({left_var_lagged} > {left_var_lagged}.shift(1)))"
         elif trend == "down":
@@ -346,31 +352,24 @@ def dsl_to_code(dsl: StrategyDSL, df_var: str = 'df') -> str:
 
         return expr
 
-    # =============================
-    # entries / exits → 최종 시그널
-    # =============================
+    # === entries / exits → 최종 시그널 ===
     entry_vars: List[str] = []
-    for i, entry in enumerate(dsl.entries):
-        cond_expr = cond_to_expr(entry.root_condition)
+    for i, entry in enumerate(getattr(dsl, "entries", []) or []):
+        root = getattr(entry, "root_condition", None)
+        cond_expr = cond_to_expr(root)
         v = f"entry_signal_{i}"
         code_lines.append(f"{v} = {cond_expr}")
         entry_vars.append(v)
 
     exit_vars: List[str] = []
-    for i, ex in enumerate(dsl.exits):
-        cond_expr = cond_to_expr(ex.root_condition)
+    for i, ex in enumerate(getattr(dsl, "exits", []) or []):
+        root = getattr(ex, "root_condition", None)
+        cond_expr = cond_to_expr(root)
         v = f"exit_signal_{i}"
         code_lines.append(f"{v} = {cond_expr}")
         exit_vars.append(v)
 
-    if entry_vars:
-        code_lines.append(f"final_buy_signal = {' | '.join(entry_vars)}")
-    else:
-        code_lines.append(f"final_buy_signal = {false_series()}")
+    code_lines.append(f"final_buy_signal = {' | '.join(entry_vars) if entry_vars else false_series()}")
+    code_lines.append(f"final_sell_signal = {' | '.join(exit_vars) if exit_vars else false_series()}")
 
-    if exit_vars:
-        code_lines.append(f"final_sell_signal = {' | '.join(exit_vars)}")
-    else:
-        code_lines.append(f"final_sell_signal = {false_series()}")
-
-    return "\n".join(code_lines)
+    return '\n'.join(code_lines)

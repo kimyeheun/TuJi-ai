@@ -6,9 +6,8 @@ env_path = Path(__file__).resolve().parent.parent / '.env'
 
 class ApiSettings(BaseSettings):
     MODEL: str = "exaone3.5"
-    HOST: str = "http://127.0.0.1"
+    OLLAMA_HOST: str = "http://127.0.0.1:11434"
     PORT: str = "8000"
-    LLAMA_PORT: str = "11434"
 
 class LoggingSettings(BaseSettings):
     LEVEL: str = "INFO"
