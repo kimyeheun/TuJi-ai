@@ -1,0 +1,186 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Visualization</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Arial; margin:0; padding:16px; background:#111; color:#eee; }
+    .panel { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+    .badge { padding:6px 10px; border:1px solid #444; border-radius:8px; cursor:pointer; background:#1b1b1b; }
+    .badge input { margin-right:6px; }
+    #chart { width:100%; height:86vh; }
+    .hint { color:#aaa; font-size:12px; margin-bottom:8px; }
+  </style>
+</head>
+<body>
+  <div class="panel" id="userPanel"></div>
+  <div id="summary" class="hint" style="margin:6px 0 10px 0;"></div>
+  <div class="hint">체크박스로 userId를 선택하면 해당 유저의 <b>매수/매도 마커</b>와 <b>자산곡선</b>이 표시됩니다. (복수 선택 가능)</div>
+  <div id="chart"></div>
+
+  <script>
+    // -------- Utils --------
+    function qs(name) {
+      const url = new URL(window.location.href);
+      return url.searchParams.get(name);
+    }
+    function okArray(a) { return Array.isArray(a) ? a : []; }
+
+    function computeFromActions(closeArr, actions, initialCash=1000000) {
+      const buys = [], sells = [], equity = [];
+      let cash = initialCash, pos = 0;
+      let lastValidPrice = null;
+
+      for (let i=0; i<closeArr.length; i++) {
+        const raw = closeArr[i];
+        const price = Number.isFinite(raw) ? raw : (lastValidPrice ?? 0);
+        if (Number.isFinite(price)) lastValidPrice = price;
+
+        const a = actions && actions[i] != null ? Number(actions[i]) : 0;
+        if (a === 1 && price > 0) {               // Buy all
+          if (cash > 0) { pos += cash / price; cash = 0; buys.push(i); }
+        } else if (a === 2 && price > 0) {        // Sell all
+          if (pos > 0) { cash += pos * price; pos = 0; sells.push(i); }
+        }
+        const eq = cash + pos * price;
+        equity.push(eq);
+      }
+      const finalValue = equity.length ? equity[equity.length - 1] : initialCash;
+      const retPct = ((finalValue - initialCash) / initialCash) * 100.0;
+      const numTrades = buys.length + sells.length;
+      return { buys, sells, equity, retPct, finalValue, numTrades };
+    }
+
+    function formatKRW(x) {
+      return Math.round(x).toLocaleString('ko-KR');
+    }
+
+    function updateSummary(DATA, selectedUsers, resultsByUser) {
+      const box = document.getElementById('summary');
+      if (!selectedUsers.length) {
+        box.innerHTML = '유저를 선택하면 수익률 요약이 표시됩니다.';
+        return;
+      }
+      const parts = selectedUsers.map(uid => {
+        const r = resultsByUser[uid];
+        if (!r) return `user ${uid}: 데이터 없음`;
+        return `user ${uid}: ${formatKRW(r.finalValue)}원 (${r.retPct.toFixed(2)}%), 거래 ${r.numTrades}회`;
+      });
+      box.innerHTML = `<b>요약</b> — ` + parts.join(' &nbsp;|&nbsp; ');
+    }
+    function buildFigure(DATA, selectedUsers) {
+      const x = DATA.x;
+      const base = DATA.base || {};
+      const ind = DATA.indicators || {};
+
+      const traces = [];
+      const resultsByUser = {};
+
+      // Candlestick
+      traces.push({
+        x, open: okArray(base.Open), high: okArray(base.High),
+        low: okArray(base.Low), close: okArray(base.Close),
+        type: 'candlestick', name: 'Price', xaxis: 'x', yaxis: 'y'
+      });
+
+      // Volume
+      if (okArray(base.Volume).length) {
+        traces.push({ x, y: base.Volume, type: 'bar', name: 'Volume', xaxis: 'x', yaxis: 'y2', opacity: 0.4 });
+      }
+
+      // Price-axis indicators
+      ['BB_UPPER','BB_MIDDLE','BB_LOWER','SMA_5','SMA_10','SMA_20','SMA_60','EMA_20','MOM','CCI'].forEach(k => {
+        if (ind[k]) traces.push({ x, y: ind[k], type:'scatter', mode:'lines', name:k, xaxis:'x', yaxis:'y' });
+      });
+
+      // RSI/MACD to indicator pane
+      if (ind.RSI) traces.push({ x, y: ind.RSI, type:'scatter', mode:'lines', name:'RSI', xaxis:'x', yaxis:'y3' });
+      if (ind.MACD) traces.push({ x, y: ind.MACD, type:'scatter', mode:'lines', name:'MACD', xaxis:'x', yaxis:'y3' });
+      if (ind.MACD_SIGNAL) traces.push({ x, y: ind.MACD_SIGNAL, type:'scatter', mode:'lines', name:'MACD_SIGNAL', xaxis:'x', yaxis:'y3' });
+      if (ind.MACD_HIST) traces.push({ x, y: ind.MACD_HIST, type:'bar', name:'MACD_HIST', xaxis:'x', yaxis:'y3', opacity:0.5 });
+
+      // Selected users: markers + equity
+      const closeArr = okArray(base.Close);
+      selectedUsers.forEach(uid => {
+        const acts = (DATA.actionsMap && DATA.actionsMap[uid]) ? DATA.actionsMap[uid] : [];
+        const result = computeFromActions(closeArr, acts);
+        const {buys, sells, equity} = result;
+        resultsByUser[uid] = result;
+        traces.push({
+          x: buys.map(i => x[i]), y: buys.map(i => closeArr[i]),
+          type:'scatter', mode:'markers', name:`BUY (user ${uid})`,
+          xaxis:'x', yaxis:'y', marker:{symbol:'triangle-up', size:10}
+        });
+        traces.push({
+          x: sells.map(i => x[i]), y: sells.map(i => closeArr[i]),
+          type:'scatter', mode:'markers', name:`SELL (user ${uid})`,
+          xaxis:'x', yaxis:'y', marker:{symbol:'triangle-down', size:10}
+        });
+        traces.push({ x, y: equity, type:'scatter', mode:'lines', name:`Equity (user ${uid})`, xaxis:'x', yaxis:'y4' });
+      });
+
+      const layout = {
+        paper_bgcolor:'#111', plot_bgcolor:'#111', font:{color:'#eee'},
+        showlegend:true, margin:{l:40,r:40,t:20,b:40},
+        xaxis:{domain:[0,1], anchor:'y'},
+        yaxis:{domain:[0.45,1], title:'Price'},
+        yaxis2:{domain:[0.30,0.45], title:'Volume'},
+        yaxis3:{domain:[0.15,0.30], title:'Indicators'},
+        yaxis4:{domain:[0.00,0.15], title:'Equity'},
+        dragmode:'pan'
+      };
+      Plotly.react('chart', traces, layout, {responsive:true, displayModeBar:true});
+      updateSummary(DATA, selectedUsers, resultsByUser);
+    }
+
+    function buildUserPanel(DATA) {
+      const panel = document.getElementById('userPanel');
+      panel.innerHTML = '';
+      const uids = Object.keys(DATA.actionsMap || {}).map(Number).sort((a,b)=>a-b);
+
+      uids.forEach(uid => {
+        const label = document.createElement('label');
+        label.className = 'badge';
+        label.innerHTML = `<input type="checkbox" value="${uid}"> user ${uid}`;
+        panel.appendChild(label);
+      });
+
+      function selected() {
+        return Array.from(panel.querySelectorAll('input[type=checkbox]:checked')).map(el => Number(el.value));
+      }
+      panel.addEventListener('change', () => buildFigure(DATA, selected()));
+      buildFigure(DATA, []); // 초기엔 아무도 선택 안 함
+    }
+
+    async function main() {
+        const roomIdStr = qs('roomId');              // string | null
+        if (roomIdStr == null || roomIdStr.trim() === '') {
+            document.getElementById('chart').innerHTML =
+             '<h3>roomId 쿼리스트링을 지정하세요. (?roomId=1)</h3>';
+            return;
+        }
+        const roomId = Number(roomIdStr);
+        if (Number.isNaN(roomId)) {
+            document.getElementById('chart').innerHTML =
+             `<h3>roomId가 숫자가 아닙니다: ${roomIdStr}</h3>`;
+            return;
+        }
+      const res = await fetch(`/ai/visualization/data?roomId=${roomId}`);
+      const DATA = await res.json();
+      if (DATA.error) {
+        document.getElementById('chart').innerHTML = `<h3>${DATA.error}</h3>`;
+        return;
+      }
+      // actionsMap 키를 숫자로 정규화
+      const fixed = {};
+      Object.entries(DATA.actionsMap || {}).forEach(([k,v]) => fixed[Number(k)] = v);
+      DATA.actionsMap = fixed;
+
+      buildUserPanel(DATA);
+    }
+
+    main();
+  </script>
+</body>
+</html>

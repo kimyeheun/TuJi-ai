@@ -26,9 +26,9 @@ settings = Settings()
 class Config:
     BASE_DIR = Path(__file__).resolve().parent
 
-    MODEL_PATH = BASE_DIR / "ai" / "models" / "lstm_classifier.pt"
+    MODEL_PATH = BASE_DIR / "ai" / "models" / "attention_lstm_classifier.pt"
     SCALER_PATH = BASE_DIR / "ai" / "models" / "scaler.pkl"
-
+    HTML_PATH = BASE_DIR / "app" / "html" / "index.html"
     PRICE_FEATURES = ["Open", "High", "Low", "Close", "Volume"]
     INDICATOR_FEATURES = ["RSI", "MACD", "MACD_SIGNAL", "BB_UPPER", "BB_LOWER", "MOM", "CCI"]
     ALL_FEATURES = PRICE_FEATURES + INDICATOR_FEATURES
