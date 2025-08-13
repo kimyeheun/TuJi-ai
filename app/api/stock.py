@@ -23,8 +23,9 @@ client = AsyncOpenAI(
 
 @router.post("/ai/init", response_model=StockInitResponse)
 async def stock_init(request: StockInitRequest):
-    room_id = request.room_id
-    if room_id in STOCK_DATA_STORE:
+    room_id = request.roomId
+    if room_id in STOCK_DATA_STORE.keys():
+        logger.print(f"{room_id}'s Storages : new user enter")
         return StockInitResponse(result="ok")
 
     # 보조 지표 계산 후 저장.
@@ -40,7 +41,7 @@ async def stock_init(request: StockInitRequest):
     # 계산된 지표를 roomId 별로 저장
     STOCK_DATA_STORE[room_id] = df
 
-    logger.print(f"{room_id}'s Storages : {STOCK_DATA_STORE.keys()}")
+    logger.print(f"{room_id}'s Storage created")
     return StockInitResponse(result="ok")
 
 
@@ -65,7 +66,6 @@ async def stock_prompt(request: PromptRequest):
     actions = await prompt_bifurcation(difficulty, prompt, stock_df, client)
     end = time()
     logger.print(f"Delay for actions : {end - start}")
-
     logger.print(f"{user_id}'s Actions : {str(actions)}")
 
     results.append(ActionResult(userId=user_id, buy=buy, sell=sell, action=actions))
@@ -75,3 +75,7 @@ async def stock_prompt(request: PromptRequest):
 @router.get("/ai/data")
 async def get_data():
     return str(STOCK_DATA_STORE)
+
+@router.get("/ai/good")
+async def get_data():
+    return str("everything is ok")
