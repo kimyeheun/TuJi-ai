@@ -21,6 +21,11 @@ client = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'),
     base_url="https://gms.ssafy.io/gmsapi/api.openai.com/v1")
 
 
+@router.get("/ai/good")
+def alright():
+    return {"ok": True}
+
+
 @router.post("/ai/init", response_model=StockInitResponse)
 async def stock_init(request: StockInitRequest):
     # 보조 지표 계산 후 저장.
