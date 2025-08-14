@@ -23,7 +23,7 @@ async def prompt_bifurcation(difficulty : int, prompt_text:str, stock_df, client
         action = await intermediate_level(prompt_text, stock_df, client)
     else:
         action = await lower_level(prompt_text, stock_df)
-    return action[-60:]
+    return action
 
 
 # NOTE: 상
@@ -123,7 +123,8 @@ async def intermediate_level(prompt_text:str, stock_df, client) -> List:
 
 # NOTE: 하
 async def lower_level(prompt_text:str, stock_df) -> List:
-    use_indicators = await get_indicators(prompt_text)
+    # use_indicators = await get_indicators(prompt_text)
+    use_indicators = ["RSI", "MACD", "MACD_SIGNAL", "BB_UPPER", "BB_LOWER", "MOM", "CCI"]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MaskAwareAttentionLSTM(input_dim=12, hidden_dim=64, output_dim=3, num_layers=2, dropout=0.3).to(device)

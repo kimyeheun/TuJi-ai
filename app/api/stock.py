@@ -21,6 +21,10 @@ client = AsyncOpenAI(
     api_key=os.getenv('OPENAI_API_KEY'),
     base_url="https://gms.ssafy.io/gmsapi/api.openai.com/v1")
 
+@router.get("/ai/good")
+def alright():
+    return {"ok": True}
+
 @router.post("/ai/init", response_model=StockInitResponse)
 async def stock_init(request: StockInitRequest):
     room_id = request.roomId
@@ -75,7 +79,3 @@ async def stock_prompt(request: PromptRequest):
 @router.get("/ai/data")
 async def get_data():
     return str(STOCK_DATA_STORE)
-
-@router.get("/ai/good")
-async def get_data():
-    return str("everything is ok")
